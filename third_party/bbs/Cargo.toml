@@ -1,0 +1,14 @@
+[package]
+name = "bbs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ken Watanabe <kenwaz113@ruri.waseda.jp>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+zkryptium = "0.2.2"
+rand_core = "0.6.4"
+
+[features]
+std = []

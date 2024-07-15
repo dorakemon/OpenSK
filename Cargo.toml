@@ -27,6 +27,7 @@ opensk = { path = "libraries/opensk", default-features = false }
 sk-cbor = { path = "libraries/cbor" }
 crypto = { path = "libraries/crypto" }
 persistent_store = { path = "libraries/persistent_store" }
+bbs = { path = "third_party/bbs" }
 libtock_unittest = { path = "third_party/libtock-rs/unittest", optional = true }
 byteorder = { version = "1", default-features = false }
 arrayref = "0.3.6"
