@@ -1217,5 +1217,12 @@ if __name__ == "__main__":
       const="nfct_test",
       help=("Compiles and installs the nfct_test example that tests the "
             "NFC driver."))
+  
+  apps_group.add_argument(
+      "--bbs",
+      dest="application",
+      action="store_const",
+      const="bbs",
+      help=("[WIP] Run Example BBS feature"))
 
   main(main_parser.parse_args())

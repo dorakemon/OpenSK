@@ -1,4 +1,5 @@
 use alloc::boxed::Box;
+use rand_core::RngCore;
 use zkryptium::bbsplus::ciphersuites::BbsCiphersuite;
 use zkryptium::bbsplus::generators::Generators;
 
@@ -8,13 +9,14 @@ use crate::{BBSCiphersuite, BBSCommitment, BBSError, LinkSecret};
 // If we don't include a nonce prepared by the Signer, someone who intercepts this Commitment could reuse it,
 // and create something arbitrarily linked to the authenticator,
 // but without the authenticator, they can't create a VP anyway, so does it matter?
-pub fn generate_link_secret_commitment(
+pub fn generate_link_secret_commitment<R: RngCore>(
+    rng: &mut R,
     link_secret: &LinkSecret,
 ) -> Result<(Box<[u8]>, Box<[u8; 32]>), BBSError> {
     let secret_messages = [link_secret.to_bytes().to_vec()];
 
     let (commitment_with_proof, secret_prover_blind) =
-        BBSCommitment::commit(Some(&secret_messages)).unwrap();
+        BBSCommitment::commit(rng, Some(&secret_messages)).unwrap();
 
     Ok((
         commitment_with_proof.to_bytes().into_boxed_slice(),
@@ -51,7 +53,7 @@ mod tests {
 
         let link_secret = LinkSecret::random(&mut rng);
 
-        let result = generate_link_secret_commitment(&link_secret);
+        let result = generate_link_secret_commitment(&mut rng, &link_secret);
 
         assert!(result.is_ok(), "Function should return Ok");
 

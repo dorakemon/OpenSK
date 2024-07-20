@@ -7,8 +7,9 @@ authors = ["Ken Watanabe <kenwaz113@ruri.waseda.jp>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-zkryptium = "0.2.2"
+# TODO: fix it later
+zkryptium = { path = "../../../zkryptium-dorakemon" }
 rand_core = "0.6.4"
 
 [features]
-std = []
+std = ["rand_core/getrandom"]
