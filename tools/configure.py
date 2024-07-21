@@ -117,13 +117,16 @@ def main(args):
     if pub_key.public_numbers() != priv_key.public_key().public_numbers():
       fatal("Certificate public doesn't match with the private key.")
     info("Certificate is valid.")
-
+    link_secret_hex = args.link_secret.read().strip().decode("utf-8")
+    link_secret_bytes = bytes.fromhex(link_secret_hex)
     cbor_data[2] = {
         1:
             cert.public_bytes(serialization.Encoding.DER),
         2:
             priv_key.private_numbers().private_value.to_bytes(
-                length=32, byteorder="big", signed=False)
+                length=32, byteorder="big", signed=False),
+        3: 
+            link_secret_bytes
     }
 
   patcher = None
@@ -203,6 +206,13 @@ if __name__ == "__main__":
       dest="priv_key",
       help=("PEM file containing the private key associated "
             "with the certificate."),
+  )
+  parser.add_argument(
+      "--link-secret",
+      type=argparse.FileType("rb"),
+      default=None,
+      dest="link_secret",
+      help=("text file containing the link secret for bbs feature")
   )
   parser.add_argument(
       "--lock-device",

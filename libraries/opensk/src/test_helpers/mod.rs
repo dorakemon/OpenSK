@@ -19,6 +19,7 @@ use crate::ctap::secret::Secret;
 use crate::ctap::status_code::Ctap2StatusCode;
 use crate::ctap::{Channel, CtapState};
 use crate::env::Env;
+use bbs::LinkSecret;
 
 // In tests where we define a dummy user-presence check that immediately returns, the channel
 // ID is irrelevant, so we pass this (dummy but valid) value.
@@ -31,6 +32,7 @@ pub fn enable_enterprise_attestation<E: Env>(
     let attestation = attestation_store::Attestation {
         private_key: Secret::from_exposed_secret([0x41; 32]),
         certificate: vec![0xdd; 20],
+        link_secret: LinkSecret::from_bytes([0x42; 32]),
     };
     env.attestation_store()
         .set(&attestation_store::Id::Batch, Some(&attestation))?;

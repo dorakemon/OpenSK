@@ -955,6 +955,7 @@ impl<E: Env> CtapState<E> {
                 let Attestation {
                     private_key,
                     certificate,
+                    ..
                 } = env
                     .attestation_store()
                     .get(&id)?

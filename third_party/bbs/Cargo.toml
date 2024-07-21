@@ -10,6 +10,7 @@ authors = ["Ken Watanabe <kenwaz113@ruri.waseda.jp>"]
 # TODO: fix it later
 zkryptium = { path = "../../../zkryptium-dorakemon" }
 rand_core = "0.6.4"
+zeroize = { version = "1.5.7", features = ["derive"] }
 
 [features]
 std = ["rand_core/getrandom"]

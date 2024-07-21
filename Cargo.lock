@@ -45,6 +45,7 @@ name = "bbs"
 version = "0.1.0"
 dependencies = [
  "rand_core",
+ "zeroize",
  "zkryptium",
 ]
 
@@ -546,6 +547,7 @@ version = "1.0.0"
 dependencies = [
  "aes",
  "arrayref",
+ "bbs",
  "byteorder",
  "cbc",
  "crypto",

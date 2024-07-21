@@ -16,6 +16,7 @@ use super::TockEnv;
 use alloc::vec;
 use alloc::vec::Vec;
 use arrayref::array_ref;
+use bbs::{generate_link_secret_commitment, LinkSecret};
 use core::convert::TryFrom;
 use libtock_platform::Syscalls;
 use opensk::api::attestation_store::{self, Attestation, AttestationStore};
@@ -38,6 +39,7 @@ use {libtock_platform as platform, sk_cbor as cbor};
 const VENDOR_COMMAND_CONFIGURE: u8 = 0x40;
 const VENDOR_COMMAND_UPGRADE: u8 = 0x42;
 const VENDOR_COMMAND_UPGRADE_INFO: u8 = 0x43;
+const VENDOR_COMMAND_BBS_COMMITMENT: u8 = 0x50;
 
 pub fn process_vendor_command<
     S: Syscalls,
@@ -76,6 +78,12 @@ fn process_cbor<S: Syscalls, C: platform::subscribe::Config + platform::allow_ro
             let response = process_vendor_upgrade_info(env)?;
             Ok(Some(encode_cbor(response.into())))
         }
+        VENDOR_COMMAND_BBS_COMMITMENT => {
+            #[cfg(not(feature = "std"))]
+            check_user_presence(env, channel)?;
+            let response = process_vendor_bbs_commitment(env)?;
+            Ok(Some(encode_cbor(response.into())))
+        }
         _ => Ok(None),
     }
 }
@@ -112,6 +120,7 @@ fn process_vendor_configure<
         None => VendorConfigureResponse {
             cert_programmed: current_attestation.is_some(),
             pkey_programmed: current_attestation.is_some(),
+            link_secret_programmed: current_attestation.is_some(),
         },
         Some(data) => {
             // We don't overwrite the attestation if it's already set. We don't return any error
@@ -120,6 +129,7 @@ fn process_vendor_configure<
                 let attestation = Attestation {
                     private_key: Secret::from_exposed_secret(data.private_key),
                     certificate: data.certificate,
+                    link_secret: LinkSecret::from_bytes(data.link_secret),
                 };
                 env.attestation_store()
                     .set(&attestation_id, Some(&attestation))?;
@@ -127,6 +137,7 @@ fn process_vendor_configure<
             VendorConfigureResponse {
                 cert_programmed: true,
                 pkey_programmed: true,
+                link_secret_programmed: true,
             }
         }
     };
@@ -180,10 +191,36 @@ fn process_vendor_upgrade_info<
     })
 }
 
+fn process_vendor_bbs_commitment<
+    S: Syscalls,
+    C: platform::subscribe::Config + platform::allow_ro::Config,
+>(
+    env: &mut TockEnv<S, C>,
+) -> Result<VendorBBSResponse, Ctap2StatusCode> {
+    let link_secret = {
+        let attestation_store = env.attestation_store();
+        attestation_store
+            .get(&attestation_store::Id::Batch)?
+            .ok_or(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
+            .link_secret
+    };
+    let commitment = {
+        let rng = env.rng();
+        generate_link_secret_commitment(rng, &link_secret)
+            .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
+    };
+    Ok(VendorBBSResponse {
+        link_secret: link_secret.to_bytes(),
+        commitment: commitment.0.to_vec(),
+        secret_prover_blind: *commitment.1,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttestationMaterial {
     pub certificate: Vec<u8>,
     pub private_key: [u8; EC_FIELD_SIZE],
+    pub link_secret: [u8; LinkSecret::SIZE],
 }
 
 impl TryFrom<cbor::Value> for AttestationMaterial {
@@ -194,17 +231,22 @@ impl TryFrom<cbor::Value> for AttestationMaterial {
             let {
                 0x01 => certificate,
                 0x02 => private_key,
+                0x03 => link_secret,
             } = extract_map(cbor_value)?;
         }
         let certificate = extract_byte_string(ok_or_missing(certificate)?)?;
         let private_key = extract_byte_string(ok_or_missing(private_key)?)?;
+        let link_secret = extract_byte_string(ok_or_missing(link_secret)?)?;
         if private_key.len() != EC_FIELD_SIZE {
             return Err(Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER);
         }
         let private_key = array_ref!(private_key, 0, EC_FIELD_SIZE);
+        let link_secret = <[u8; LinkSecret::SIZE]>::try_from(link_secret)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
         Ok(AttestationMaterial {
             certificate,
             private_key: *private_key,
+            link_secret,
         })
     }
 }
@@ -266,6 +308,7 @@ impl TryFrom<cbor::Value> for VendorUpgradeParameters {
 pub struct VendorConfigureResponse {
     pub cert_programmed: bool,
     pub pkey_programmed: bool,
+    pub link_secret_programmed: bool,
 }
 
 impl From<VendorConfigureResponse> for cbor::Value {
@@ -273,11 +316,13 @@ impl From<VendorConfigureResponse> for cbor::Value {
         let VendorConfigureResponse {
             cert_programmed,
             pkey_programmed,
+            link_secret_programmed,
         } = vendor_response;
 
         cbor_map_options! {
             0x01 => cert_programmed,
             0x02 => pkey_programmed,
+            0x03 => link_secret_programmed,
         }
     }
 }
@@ -293,6 +338,30 @@ impl From<VendorUpgradeInfoResponse> for cbor::Value {
 
         cbor_map_options! {
             0x01 => info as u64,
+        }
+    }
+}
+
+// TODO: link_secret must be removed from the response. This is fir temporal debugging.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VendorBBSResponse {
+    pub link_secret: [u8; 32],
+    pub commitment: Vec<u8>,
+    pub secret_prover_blind: [u8; 32],
+}
+
+impl From<VendorBBSResponse> for cbor::Value {
+    fn from(vendor_bbs_response: VendorBBSResponse) -> Self {
+        let VendorBBSResponse {
+            link_secret,
+            commitment,
+            secret_prover_blind,
+        } = vendor_bbs_response;
+
+        cbor_map_options! {
+            0x01 => link_secret,
+            0x02 => commitment,
+            0x03 => secret_prover_blind,
         }
     }
 }
@@ -348,6 +417,7 @@ mod test {
     fn test_vendor_configure_parameters() {
         let dummy_cert = [0xddu8; 20];
         let dummy_pkey = [0x41u8; EC_FIELD_SIZE];
+        let dummy_link_secret = [0x42u8; LinkSecret::SIZE];
 
         // Attestation key is too short.
         let cbor_value = cbor_map! {
@@ -391,7 +461,8 @@ mod test {
             0x01 => false,
             0x02 => cbor_map! {
                 0x01 => dummy_cert,
-                0x02 => dummy_pkey
+                0x02 => dummy_pkey,
+                0x03 => dummy_link_secret
             },
         };
         assert_eq!(
@@ -400,7 +471,8 @@ mod test {
                 lockdown: false,
                 attestation_material: Some(AttestationMaterial {
                     certificate: dummy_cert.to_vec(),
-                    private_key: dummy_pkey
+                    private_key: dummy_pkey,
+                    link_secret: dummy_link_secret,
                 }),
             })
         );
@@ -492,12 +564,14 @@ mod test {
             Ok(VendorConfigureResponse {
                 cert_programmed: false,
                 pkey_programmed: false,
+                link_secret_programmed: false,
             })
         );
 
         // Inject dummy values
         let dummy_key = [0x41u8; EC_FIELD_SIZE];
         let dummy_cert = [0xddu8; 20];
+        let dummy_link_secret = [0x42u8; LinkSecret::SIZE];
         let response = process_vendor_configure(
             &mut env,
             VendorConfigureParameters {
@@ -505,6 +579,7 @@ mod test {
                 attestation_material: Some(AttestationMaterial {
                     certificate: dummy_cert.to_vec(),
                     private_key: dummy_key,
+                    link_secret: dummy_link_secret,
                 }),
             },
             DUMMY_CHANNEL,
@@ -514,6 +589,7 @@ mod test {
             Ok(VendorConfigureResponse {
                 cert_programmed: true,
                 pkey_programmed: true,
+                link_secret_programmed: true,
             })
         );
         assert_eq!(
@@ -521,6 +597,7 @@ mod test {
             Ok(Some(Attestation {
                 private_key: Secret::from_exposed_secret(dummy_key),
                 certificate: dummy_cert.to_vec(),
+                link_secret: LinkSecret::from_bytes(dummy_link_secret),
             }))
         );
 
@@ -533,6 +610,7 @@ mod test {
                 attestation_material: Some(AttestationMaterial {
                     certificate: dummy_cert.to_vec(),
                     private_key: other_dummy_key,
+                    link_secret: dummy_link_secret,
                 }),
             },
             DUMMY_CHANNEL,
@@ -542,6 +620,7 @@ mod test {
             Ok(VendorConfigureResponse {
                 cert_programmed: true,
                 pkey_programmed: true,
+                link_secret_programmed: true,
             })
         );
         assert_eq!(
@@ -549,6 +628,7 @@ mod test {
             Ok(Some(Attestation {
                 private_key: Secret::from_exposed_secret(dummy_key),
                 certificate: dummy_cert.to_vec(),
+                link_secret: LinkSecret::from_bytes(dummy_link_secret),
             }))
         );
 
@@ -684,6 +764,7 @@ mod test {
         let response_cbor: cbor::Value = VendorConfigureResponse {
             cert_programmed: true,
             pkey_programmed: false,
+            link_secret_programmed: false,
         }
         .into();
         assert_eq!(
@@ -691,11 +772,13 @@ mod test {
             cbor_map_options! {
                 0x01 => true,
                 0x02 => false,
+                0x03 => false,
             }
         );
         let response_cbor: cbor::Value = VendorConfigureResponse {
             cert_programmed: false,
             pkey_programmed: true,
+            link_secret_programmed: false,
         }
         .into();
         assert_eq!(
@@ -703,6 +786,7 @@ mod test {
             cbor_map_options! {
                 0x01 => false,
                 0x02 => true,
+                0x03 => false,
             }
         );
     }

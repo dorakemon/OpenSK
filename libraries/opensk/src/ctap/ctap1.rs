@@ -277,6 +277,7 @@ impl Ctap1Command {
         let Attestation {
             private_key,
             certificate,
+            ..
         } = env
             .attestation_store()
             .get(&attestation_store::Id::Batch)?

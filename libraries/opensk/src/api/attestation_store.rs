@@ -15,7 +15,9 @@
 use crate::api::crypto::EC_FIELD_SIZE;
 use crate::ctap::secret::Secret;
 use crate::env::Env;
+use alloc::vec;
 use alloc::vec::Vec;
+use bbs::LinkSecret;
 use persistent_store::{StoreError, StoreUpdate};
 
 /// Identifies an attestation.
@@ -30,6 +32,7 @@ pub struct Attestation {
     /// ECDSA private key (big-endian).
     pub private_key: Secret<[u8; EC_FIELD_SIZE]>,
     pub certificate: Vec<u8>,
+    pub link_secret: LinkSecret,
 }
 
 /// Stores enterprise or batch attestations.
@@ -56,51 +59,71 @@ pub enum Error {
 }
 
 /// Keys of the environment store reserved for the attestation store.
-pub const STORAGE_KEYS: &[usize] = &[1, 2];
+pub const STORAGE_KEYS: &[usize] = &[1, 2, 3];
 
 pub fn helper_get(env: &mut impl Env) -> Result<Option<Attestation>, Error> {
     let private_key = env.store().find(PRIVATE_KEY_STORAGE_KEY)?;
     let certificate = env.store().find(CERTIFICATE_STORAGE_KEY)?;
-    let (private_key, certificate) = match (private_key, certificate) {
-        (Some(x), Some(y)) => (x, y),
-        (None, None) => return Ok(None),
+    let link_secret = env.store().find(LINK_SECRET_STORAGE_KEY)?;
+    let (private_key, certificate, link_secret) = match (private_key, certificate, link_secret) {
+        (Some(x), Some(y), Some(z)) => (x, y, z),
+        (None, None, None) => return Ok(None),
         _ => return Err(Error::Internal),
     };
     if private_key.len() != EC_FIELD_SIZE {
         return Err(Error::Internal);
     }
+    let link_secret = if link_secret.len() == LinkSecret::SIZE {
+        let mut array = [0u8; LinkSecret::SIZE];
+        array.copy_from_slice(&link_secret);
+        LinkSecret::from_bytes(array)
+    } else {
+        return Err(Error::Internal);
+    };
     Ok(Some(Attestation {
         private_key: Secret::from_exposed_secret(*array_ref![private_key, 0, EC_FIELD_SIZE]),
         certificate,
+        link_secret,
     }))
 }
 
 pub fn helper_set(env: &mut impl Env, attestation: Option<&Attestation>) -> Result<(), Error> {
     let updates = match attestation {
-        None => [
+        None => vec![
             StoreUpdate::Remove {
                 key: PRIVATE_KEY_STORAGE_KEY,
             },
             StoreUpdate::Remove {
                 key: CERTIFICATE_STORAGE_KEY,
             },
-        ],
-        Some(attestation) => [
-            StoreUpdate::Insert {
-                key: PRIVATE_KEY_STORAGE_KEY,
-                value: &attestation.private_key[..],
-            },
-            StoreUpdate::Insert {
-                key: CERTIFICATE_STORAGE_KEY,
-                value: &attestation.certificate[..],
+            StoreUpdate::Remove {
+                key: LINK_SECRET_STORAGE_KEY,
             },
         ],
+        Some(attestation) => {
+            let link_secret_bytes = attestation.link_secret.to_bytes().to_vec();
+            vec![
+                StoreUpdate::Insert {
+                    key: PRIVATE_KEY_STORAGE_KEY,
+                    value: attestation.private_key[..].to_vec(),
+                },
+                StoreUpdate::Insert {
+                    key: CERTIFICATE_STORAGE_KEY,
+                    value: attestation.certificate.clone(),
+                },
+                StoreUpdate::Insert {
+                    key: LINK_SECRET_STORAGE_KEY,
+                    value: link_secret_bytes,
+                },
+            ]
+        }
     };
     Ok(env.store().transaction(&updates)?)
 }
 
 const PRIVATE_KEY_STORAGE_KEY: usize = STORAGE_KEYS[0];
 const CERTIFICATE_STORAGE_KEY: usize = STORAGE_KEYS[1];
+const LINK_SECRET_STORAGE_KEY: usize = STORAGE_KEYS[2];
 
 impl From<StoreError> for Error {
     fn from(error: StoreError) -> Self {
