@@ -11,6 +11,28 @@ authors = ["Ken Watanabe <kenwaz113@ruri.waseda.jp>"]
 zkryptium = { path = "../../../zkryptium-dorakemon" }
 rand_core = "0.6.4"
 zeroize = { version = "1.5.7", features = ["derive"] }
+bls12_381_plus = { version = "0.8.17", default-features = false }
+
+serde = { version = "1.0", optional = true }
+serde_json = { version = "=1.0.79", optional = true }
+hex = { version = "0.3.2", optional = true }
+
 
 [features]
-std = ["rand_core/getrandom"]
+std = [
+  "rand_core/getrandom",
+  "bls12_381_plus/std",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:hex",
+]
+
+[[bin]]
+name = "generator"
+path = "generator/generate_fixtures.rs"
+required-features = ["std"]
+
+[[bin]]
+name = "check-fixture-validity"
+path = "generator/check_proof_validity.rs"
+required-features = ["std"]

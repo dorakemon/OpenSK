@@ -16,7 +16,10 @@ use super::TockEnv;
 use alloc::vec;
 use alloc::vec::Vec;
 use arrayref::array_ref;
-use bbs::{generate_link_secret_commitment, LinkSecret};
+use bbs::{
+    generate_link_secret_commitment, generate_proof, BBSCommitmentBlindFactor, BBSPublicKey,
+    BBSSignature, LinkSecret,
+};
 use core::convert::TryFrom;
 use libtock_platform::Syscalls;
 use opensk::api::attestation_store::{self, Attestation, AttestationStore};
@@ -27,7 +30,7 @@ use opensk::api::customization::Customization;
 #[cfg(not(feature = "std"))]
 use opensk::ctap::check_user_presence;
 use opensk::ctap::data_formats::{
-    extract_bool, extract_byte_string, extract_map, extract_unsigned, ok_or_missing,
+    extract_array, extract_bool, extract_byte_string, extract_map, extract_unsigned, ok_or_missing,
 };
 use opensk::ctap::secret::Secret;
 use opensk::ctap::status_code::Ctap2StatusCode;
@@ -40,6 +43,7 @@ const VENDOR_COMMAND_CONFIGURE: u8 = 0x40;
 const VENDOR_COMMAND_UPGRADE: u8 = 0x42;
 const VENDOR_COMMAND_UPGRADE_INFO: u8 = 0x43;
 const VENDOR_COMMAND_BBS_COMMITMENT: u8 = 0x50;
+const VENDOR_COMMAND_BBS_PROOF: u8 = 0x51;
 
 pub fn process_vendor_command<
     S: Syscalls,
@@ -82,6 +86,14 @@ fn process_cbor<S: Syscalls, C: platform::subscribe::Config + platform::allow_ro
             #[cfg(not(feature = "std"))]
             check_user_presence(env, channel)?;
             let response = process_vendor_bbs_commitment(env)?;
+            Ok(Some(encode_cbor(response.into())))
+        }
+        VENDOR_COMMAND_BBS_PROOF => {
+            let decoded_cbor = cbor_read(&bytes[1..])?;
+            let params = VendorBBSProofParameters::try_from(decoded_cbor)?;
+            #[cfg(not(feature = "std"))]
+            check_user_presence(env, channel)?;
+            let response = process_vendor_bbs_proof(env, params)?;
             Ok(Some(encode_cbor(response.into())))
         }
         _ => Ok(None),
@@ -196,7 +208,7 @@ fn process_vendor_bbs_commitment<
     C: platform::subscribe::Config + platform::allow_ro::Config,
 >(
     env: &mut TockEnv<S, C>,
-) -> Result<VendorBBSResponse, Ctap2StatusCode> {
+) -> Result<VendorBBSCommitmentResponse, Ctap2StatusCode> {
     let link_secret = {
         let attestation_store = env.attestation_store();
         attestation_store
@@ -209,10 +221,46 @@ fn process_vendor_bbs_commitment<
         generate_link_secret_commitment(rng, &link_secret)
             .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
     };
-    Ok(VendorBBSResponse {
+    Ok(VendorBBSCommitmentResponse {
         link_secret: link_secret.to_bytes(),
         commitment: commitment.0.to_vec(),
         secret_prover_blind: *commitment.1,
+    })
+}
+
+fn process_vendor_bbs_proof<
+    S: Syscalls,
+    C: platform::subscribe::Config + platform::allow_ro::Config,
+>(
+    env: &mut TockEnv<S, C>,
+    params: VendorBBSProofParameters,
+) -> Result<VendorBBSProofResponse, Ctap2StatusCode> {
+    let link_secret = {
+        let attestation_store = env.attestation_store();
+        attestation_store
+            .get(&attestation_store::Id::Batch)?
+            .ok_or(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
+            .link_secret
+    };
+    let proof = {
+        let rng = env.rng();
+        let proof_response = generate_proof(
+            rng,
+            &params.public_key,
+            &params.messages,
+            &link_secret,
+            &params.signature,
+            Some(&params.header),
+            Some(&params.presentation_header),
+            &params.disclosed_indexes,
+            Some(&params.secret_prover_blind),
+        )
+        .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+        proof_response.proof
+    };
+    Ok(VendorBBSProofResponse {
+        proof_bytes: proof.to_bytes().to_vec(),
+        // proof_bytes: link_secret.to_bytes().to_vec(),
     })
 }
 
@@ -344,15 +392,15 @@ impl From<VendorUpgradeInfoResponse> for cbor::Value {
 
 // TODO: link_secret must be removed from the response. This is fir temporal debugging.
 #[derive(Debug, PartialEq, Eq)]
-pub struct VendorBBSResponse {
+pub struct VendorBBSCommitmentResponse {
     pub link_secret: [u8; 32],
     pub commitment: Vec<u8>,
     pub secret_prover_blind: [u8; 32],
 }
 
-impl From<VendorBBSResponse> for cbor::Value {
-    fn from(vendor_bbs_response: VendorBBSResponse) -> Self {
-        let VendorBBSResponse {
+impl From<VendorBBSCommitmentResponse> for cbor::Value {
+    fn from(vendor_bbs_response: VendorBBSCommitmentResponse) -> Self {
+        let VendorBBSCommitmentResponse {
             link_secret,
             commitment,
             secret_prover_blind,
@@ -362,6 +410,98 @@ impl From<VendorBBSResponse> for cbor::Value {
             0x01 => link_secret,
             0x02 => commitment,
             0x03 => secret_prover_blind,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VendorBBSProofParameters {
+    pub public_key: BBSPublicKey,
+    pub messages: Vec<Vec<u8>>,
+    pub signature: BBSSignature,
+    pub header: Vec<u8>,
+    pub presentation_header: Vec<u8>,
+    pub disclosed_indexes: Vec<usize>,
+    pub secret_prover_blind: BBSCommitmentBlindFactor,
+}
+
+impl TryFrom<cbor::Value> for VendorBBSProofParameters {
+    type Error = Ctap2StatusCode;
+
+    fn try_from(cbor_value: cbor::Value) -> Result<Self, Ctap2StatusCode> {
+        destructure_cbor_map! {
+            let {
+                0x01 => public_key,
+                0x02 => messages,
+                0x03 => signature,
+                0x04 => header,
+                0x05 => presentation_header,
+                0x06 => disclosed_indexes,
+                0x07 => secret_prover_blind,
+            } = extract_map(cbor_value)?;
+        }
+
+        let public_key = extract_byte_string(ok_or_missing(public_key)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let public_key = BBSPublicKey::from_bytes(public_key.as_slice())
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+
+        let messages = extract_array(ok_or_missing(messages)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let messages = messages
+            .iter()
+            .map(|message| extract_byte_string(message.clone()).unwrap())
+            .collect::<Vec<_>>();
+
+        let signature_raw = extract_byte_string(ok_or_missing(signature)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let mut signature: [u8; 80] = [0u8; 80];
+        signature.copy_from_slice(&signature_raw);
+        let signature = BBSSignature::from_bytes(&signature)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+
+        let header = extract_byte_string(ok_or_missing(header)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let presentation_header = extract_byte_string(ok_or_missing(presentation_header)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+
+        let disclosed_indexes = extract_array(ok_or_missing(disclosed_indexes)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let disclosed_indexes = disclosed_indexes
+            .iter()
+            .map(|index| extract_unsigned(index.clone()).and_then(|u| Ok(u as usize)))
+            .collect::<Result<Vec<usize>, Ctap2StatusCode>>()?;
+
+        let secret_prover_blind_raw = extract_byte_string(ok_or_missing(secret_prover_blind)?)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+        let mut secret_prover_blind = [0u8; 32];
+        secret_prover_blind.copy_from_slice(&secret_prover_blind_raw);
+        let secret_prover_blind = BBSCommitmentBlindFactor::from_bytes(&secret_prover_blind)
+            .map_err(|_| Ctap2StatusCode::CTAP1_ERR_INVALID_PARAMETER)?;
+
+        Ok(VendorBBSProofParameters {
+            public_key,
+            messages,
+            signature,
+            header,
+            presentation_header,
+            disclosed_indexes,
+            secret_prover_blind,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct VendorBBSProofResponse {
+    pub proof_bytes: Vec<u8>,
+}
+
+impl From<VendorBBSProofResponse> for cbor::Value {
+    fn from(vendor_bbs_response: VendorBBSProofResponse) -> Self {
+        let VendorBBSProofResponse { proof_bytes } = vendor_bbs_response;
+
+        cbor_map_options! {
+            0x01 => proof_bytes,
         }
     }
 }

@@ -62,7 +62,7 @@ mod tests {
             assert!(!secret_blind.is_empty(), "Secret blind should not be empty");
 
             let result = verify_link_secret_commitment(commitment).unwrap();
-            assert!(result)
+            assert!(result, "Commitment should be valid");
         }
     }
 }

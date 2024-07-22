@@ -44,6 +44,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 name = "bbs"
 version = "0.1.0"
 dependencies = [
+ "bls12_381_plus",
  "rand_core",
  "zeroize",
  "zkryptium",
@@ -66,9 +67,9 @@ dependencies = [
 
 [[package]]
 name = "bls12_381_plus"
-version = "0.8.16"
+version = "0.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2aaee9ad0cc5ad8ccf599a98542ecafb67aa905f42d002f52109b362dae5a96f"
+checksum = "68ed5f583bb45888c562e1f117f7f20ce86a640f1163c38fe665ac7a71190861"
 dependencies = [
  "arrayref",
  "elliptic-curve",
