@@ -65,8 +65,6 @@ pub fn main() {
     write_str("Proof: ");
     write_hex(&proof_response.proof.to_bytes());
     write_str("\n");
-    // Note: We can't easily print complex types in no_std environment
-    // So we'll skip printing disclosed_messages and disclosed_indexes
 }
 
 fn write_str(s: &str) {
