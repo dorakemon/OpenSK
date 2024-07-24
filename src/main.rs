@@ -49,7 +49,7 @@ use opensk::env::Env;
 use opensk::Transport;
 
 #[cfg(not(feature = "std"))]
-stack_size! {0x4000}
+stack_size! {0x8000}
 #[cfg(not(feature = "std"))]
 set_main! {main}
 
