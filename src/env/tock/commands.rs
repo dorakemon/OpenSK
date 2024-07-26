@@ -222,7 +222,6 @@ fn process_vendor_bbs_commitment<
             .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?
     };
     Ok(VendorBBSCommitmentResponse {
-        link_secret: link_secret.to_bytes(),
         commitment: commitment.0.to_vec(),
         secret_prover_blind: *commitment.1,
     })
@@ -393,7 +392,6 @@ impl From<VendorUpgradeInfoResponse> for cbor::Value {
 // TODO: link_secret must be removed from the response. This is fir temporal debugging.
 #[derive(Debug, PartialEq, Eq)]
 pub struct VendorBBSCommitmentResponse {
-    pub link_secret: [u8; 32],
     pub commitment: Vec<u8>,
     pub secret_prover_blind: [u8; 32],
 }
@@ -401,15 +399,13 @@ pub struct VendorBBSCommitmentResponse {
 impl From<VendorBBSCommitmentResponse> for cbor::Value {
     fn from(vendor_bbs_response: VendorBBSCommitmentResponse) -> Self {
         let VendorBBSCommitmentResponse {
-            link_secret,
             commitment,
             secret_prover_blind,
         } = vendor_bbs_response;
 
         cbor_map_options! {
-            0x01 => link_secret,
-            0x02 => commitment,
-            0x03 => secret_prover_blind,
+            0x01 => commitment,
+            0x02 => secret_prover_blind,
         }
     }
 }
